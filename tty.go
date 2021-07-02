@@ -8,8 +8,77 @@ import (
 	"github.com/gliderlabs/ssh"
 )
 
+type InterleavedSSHSession interface {
+	ssh.Session
+	Interleave(byte)
+}
+
+type interleavedSSHSession struct {
+	ssh.Session
+	interleaved chan byte
+	incoming    chan readResult
+	stop        chan bool
+}
+
+func (i *interleavedSSHSession) loop() {
+	defer close(i.incoming)
+	for {
+		buf := make([]byte, 1)
+		_, err := i.Session.Read(buf)
+		select {
+		case i.incoming <- readResult{b: buf[0], err: err}:
+		case <-i.stop:
+			return
+		}
+	}
+}
+
+func (i *interleavedSSHSession) Read(b []byte) (int, error) {
+	select {
+	case rr, ok := <-i.incoming:
+		if !ok {
+			return 0, io.EOF
+		}
+		if len(b) > 0 {
+			b[0] = rr.b
+			return 1, rr.err
+		}
+		return 0, rr.err
+	case i := <-i.interleaved:
+		if len(b) > 0 {
+			b[0] = i
+		}
+		return 1, nil
+	}
+}
+
+func (i *interleavedSSHSession) Interleave(b byte) {
+	i.interleaved <- b
+}
+
+func (i *interleavedSSHSession) Close() error {
+	close(i.stop)
+	return i.Session.Close()
+}
+
+func NewInterleavedSSHSession(sess ssh.Session) InterleavedSSHSession {
+	res := &interleavedSSHSession{
+		Session:     sess,
+		interleaved: make(chan byte),
+		incoming:    make(chan readResult),
+		stop:        make(chan bool),
+	}
+	go res.loop()
+	return res
+}
+
+type readResult struct {
+	b   byte
+	err error
+}
+
 type SSHTTY struct {
-	Sess ssh.Session
+	Sess InterleavedSSHSession
 
 	resizeCallback func()
 	stop           chan bool
@@ -19,27 +88,23 @@ type SSHTTY struct {
 	height         int
 }
 
-type readResult struct {
-	b   byte
-	err error
-}
-
-func (s *SSHTTY) readOneByte(c chan readResult) {
-	defer close(c)
+func (s *SSHTTY) readOneByte(inc chan readResult) {
+	defer close(inc)
 	buf := make([]byte, 1)
 	_, err := s.Sess.Read(buf)
 	select {
 	case <-s.stop:
+		s.Sess.Interleave(buf[0])
 		return
-	case c <- readResult{b: buf[0], err: err}:
+	case inc <- readResult{b: buf[0], err: err}:
 	}
 }
 
 func (s *SSHTTY) Read(b []byte) (int, error) {
-	incoming := make(chan readResult)
-	go s.readOneByte(incoming)
+	inc := make(chan readResult)
+	go s.readOneByte(inc)
 	select {
-	case v, ok := <-incoming:
+	case v, ok := <-inc:
 		if ok {
 			b[0] = v.b
 			return 1, v.err
