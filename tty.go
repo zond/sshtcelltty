@@ -178,7 +178,7 @@ func (s *SSHTTY) WindowSize() (tcell.WindowSize, error) {
 	return tcell.WindowSize{
 		Width:       s.width,
 		Height:      s.height,
-		PixelWidgh:  s.width,
+		PixelWidth:  s.width,
 		PixelHeight: s.height,
 	}, nil
 }
