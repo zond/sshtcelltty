@@ -5,6 +5,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/gdamore/tcell"
 	"github.com/gliderlabs/ssh"
 )
 
@@ -171,10 +172,15 @@ func (s *SSHTTY) Stop() error {
 	return nil
 }
 
-func (s *SSHTTY) WindowSize() (int, int, error) {
+func (s *SSHTTY) WindowSize() (tcell.WindowSize, error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	return s.width, s.height, nil
+	return tcell.WindowSize{
+		Width:       s.width,
+		Height:      s.height,
+		PixelWidgh:  s.width,
+		PixelHeight: s.height,
+	}, nil
 }
 
 func (s *SSHTTY) NotifyResize(cb func()) {
